@@ -1,43 +1,24 @@
 # Excel Splitter & PDF Generator
 
-A Streamlit version of the two desktop Python programs. It:
+Streamlit application for splitting an Excel workbook by GST State Code and creating print-ready Excel and PDF files.
 
-1. Uploads one `.xlsx` or `.xlsm` file.
-2. Splits the active worksheet using a selected column.
-3. Adds serial numbers and total formulas.
-4. Generates one Excel file for every unique split value.
-5. Optionally converts all generated Excel files to PDF using LibreOffice.
-6. Provides ZIP downloads for Excel files, PDF files, or both.
+## Main features
 
-## GitHub files
+- User enters unwanted source columns such as `A,B,C` on the front page.
+- Unwanted columns are removed from every generated file.
+- Remaining data font automatically becomes larger when fewer columns remain.
+- Row 1 is rebuilt as a large bold title with the GST State Code at the right.
+- Rows 1 and 2 repeat on every printed page.
+- All remaining columns fit on one Legal landscape page width.
+- Additional rows continue automatically to page 2, page 3, and further pages.
+- Dark Arial fonts and strong borders improve print visibility.
 
-Keep these three deployment files in the repository root:
+## GitHub / Streamlit deployment
+
+Upload these files to the repository root:
 
 - `app.py`
 - `requirements.txt`
 - `packages.txt`
 
-`packages.txt` installs LibreOffice on Streamlit Community Cloud. Without LibreOffice, Excel generation works but PDF conversion does not.
-
-## Run locally
-
-```bash
-pip install -r requirements.txt
-streamlit run app.py
-```
-
-For PDF generation, install LibreOffice on the computer and ensure `libreoffice` or `soffice` is available in the system PATH.
-
-## Deploy on Streamlit Community Cloud
-
-1. Create a GitHub repository.
-2. Upload `app.py`, `requirements.txt`, and `packages.txt` to the repository root.
-3. In Streamlit Community Cloud, select the repository and choose `app.py` as the main file.
-4. Deploy the app.
-
-## Workbook assumptions
-
-- Row 1 and row 2 are headers.
-- Data starts from row 3.
-- The active worksheet is processed.
-- Total formulas are inserted in the selected start-to-end column range.
+Deploy `app.py` from Streamlit Community Cloud.

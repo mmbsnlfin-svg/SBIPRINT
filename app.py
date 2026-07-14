@@ -11,49 +11,55 @@ from pathlib import Path
 
 import streamlit as st
 from openpyxl import Workbook, load_workbook
-from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import column_index_from_string, get_column_letter
 
 
-# -----------------------------
-# PRINT / STYLE SETTINGS
-# -----------------------------
 BLACK = "000000"
+THIN_SIDE = Side(border_style="thin", color=BLACK)
 MEDIUM_SIDE = Side(border_style="medium", color=BLACK)
-MEDIUM_BORDER = Border(
-    left=MEDIUM_SIDE,
-    right=MEDIUM_SIDE,
-    top=MEDIUM_SIDE,
-    bottom=MEDIUM_SIDE,
-)
+THIN_BORDER = Border(left=THIN_SIDE, right=THIN_SIDE, top=THIN_SIDE, bottom=THIN_SIDE)
+MEDIUM_BORDER = Border(left=MEDIUM_SIDE, right=MEDIUM_SIDE, top=MEDIUM_SIDE, bottom=MEDIUM_SIDE)
 
-# Minimum widths from Column A onward. Auto-fit may increase these widths.
-MIN_COLUMN_WIDTHS = [
-    6, 12, 12, 12, 12, 7, 9, 25, 8, 10,
-    15, 15, 15, 15, 15, 15, 15, 15, 10, 12, 11, 13,
+# Preferred widths of source columns A onward. These widths are automatically
+# scaled after unwanted columns are removed.
+BASE_COLUMN_WIDTHS = [
+    6, 12, 12, 12, 12, 5, 9, 25, 6, 9,
+    15, 15, 15, 15, 15, 15, 15, 15, 8, 12, 9, 12,
 ]
 
-DEFAULT_FONT_NAME = "Arial"
-DEFAULT_DATA_FONT_SIZE = 10
-DEFAULT_HEADER_FONT_SIZE = 10
-MAX_AUTO_WIDTH = 35
-MIN_AUTO_WIDTH = 6
 
-
-# -----------------------------
-# GENERAL HELPERS
-# -----------------------------
 def letter_to_index(col_letter: str) -> int:
-    """Convert an Excel column letter to a 1-based column number."""
     value = col_letter.strip().upper()
     if not re.fullmatch(r"[A-Z]{1,3}", value):
         raise ValueError(f"Invalid Excel column: {col_letter!r}")
     return column_index_from_string(value)
 
 
+def parse_skipped_columns(text: str) -> set[int]:
+    """Convert A,B,C or A B C into a set of source column numbers."""
+    if not text.strip():
+        return set()
+
+    parts = [part for part in re.split(r"[\s,;]+", text.strip().upper()) if part]
+    skipped: set[int] = set()
+    invalid: list[str] = []
+
+    for part in parts:
+        if re.fullmatch(r"[A-Z]{1,3}", part):
+            skipped.add(column_index_from_string(part))
+        else:
+            invalid.append(part)
+
+    if invalid:
+        raise ValueError(
+            "Invalid skipped column value(s): " + ", ".join(invalid) +
+            ". Enter columns like A,B,C."
+        )
+    return skipped
+
+
 def clean_filename(value: object) -> str:
-    """Create a safe, non-empty output filename."""
     text = str(value).strip()
     text = re.sub(r'[\\/*?:"<>|]', "", text)
     text = re.sub(r"\s+", " ", text).strip(" .")
@@ -61,7 +67,6 @@ def clean_filename(value: object) -> str:
 
 
 def unique_filename(base_name: str, used_names: set[str], extension: str) -> str:
-    """Avoid overwriting files when cleaned split values are identical."""
     candidate = f"{base_name}{extension}"
     counter = 2
     while candidate.lower() in used_names:
@@ -72,7 +77,6 @@ def unique_filename(base_name: str, used_names: set[str], extension: str) -> str
 
 
 def copy_cell(src_cell, dst_cell) -> None:
-    """Copy a cell value, style, hyperlink and comment."""
     dst_cell.value = src_cell.value
     if src_cell.has_style:
         dst_cell.font = copy.copy(src_cell.font)
@@ -87,12 +91,17 @@ def copy_cell(src_cell, dst_cell) -> None:
         dst_cell.comment = copy.copy(src_cell.comment)
 
 
-def copy_row(src_ws, dst_ws, src_row_idx: int, dst_row_idx: int, max_col: int) -> None:
-    """Copy an entire row including styles and row height."""
-    for col_idx in range(1, max_col + 1):
+def copy_selected_row(
+    src_ws,
+    dst_ws,
+    src_row_idx: int,
+    dst_row_idx: int,
+    visible_source_columns: list[int],
+) -> None:
+    for dst_col_idx, src_col_idx in enumerate(visible_source_columns, start=1):
         copy_cell(
-            src_ws.cell(row=src_row_idx, column=col_idx),
-            dst_ws.cell(row=dst_row_idx, column=col_idx),
+            src_ws.cell(row=src_row_idx, column=src_col_idx),
+            dst_ws.cell(row=dst_row_idx, column=dst_col_idx),
         )
 
     source_height = src_ws.row_dimensions[src_row_idx].height
@@ -100,214 +109,373 @@ def copy_row(src_ws, dst_ws, src_row_idx: int, dst_row_idx: int, max_col: int) -
         dst_ws.row_dimensions[dst_row_idx].height = source_height
 
 
-def copy_column_dimensions(src_ws, dst_ws, max_col: int) -> None:
-    """Copy original widths and hidden status."""
-    for col_idx in range(1, max_col + 1):
-        letter = get_column_letter(col_idx)
-        src_dim = src_ws.column_dimensions.get(letter)
-        if src_dim:
-            if src_dim.width is not None:
-                dst_ws.column_dimensions[letter].width = src_dim.width
-            dst_ws.column_dimensions[letter].hidden = src_dim.hidden
+def choose_font_sizes(visible_column_count: int) -> tuple[float, float, float]:
+    """Return body, header and title font sizes based on remaining columns."""
+    if visible_column_count <= 10:
+        return 11.0, 11.0, 16.0
+    if visible_column_count <= 14:
+        return 10.0, 10.0, 15.0
+    if visible_column_count <= 18:
+        return 9.0, 9.0, 14.0
+    if visible_column_count <= 22:
+        return 8.0, 8.0, 13.0
+    if visible_column_count <= 26:
+        return 7.0, 7.0, 12.0
+    return 6.5, 6.5, 11.0
 
 
-def copy_header_merged_cells(src_ws, dst_ws) -> None:
-    """Copy merged ranges fully contained within header rows 1 and 2."""
-    for merged_range in src_ws.merged_cells.ranges:
-        if merged_range.min_row >= 1 and merged_range.max_row <= 2:
-            dst_ws.merge_cells(str(merged_range))
+def source_title_text(source_ws) -> str:
+    """Get the main title from row 1, ignoring short state-code-like values."""
+    candidates: list[str] = []
+    for cell in source_ws[1]:
+        if cell.value is None:
+            continue
+        text = str(cell.value).strip()
+        if text:
+            candidates.append(text)
+    if not candidates:
+        return "Statement"
+    return max(candidates, key=len)
 
 
-def value_display_length(value: object) -> int:
-    """Estimate visible character length for column auto-fit."""
-    if value is None:
-        return 0
-    text = str(value)
-    if "\n" in text:
-        return max(len(part) for part in text.splitlines())
-    return len(text)
+def apply_column_widths(
+    source_ws,
+    target_ws,
+    visible_source_columns: list[int],
+    body_font_size: float,
+    data_last_row: int,
+) -> None:
+    """Set widths from headers/data only; row 1 title is deliberately ignored.
+
+    This prevents the long merged title from making the Sr. No. or other columns
+    unnecessarily wide. Widths are capped so all columns remain printable.
+    """
+    for dst_col, src_col in enumerate(visible_source_columns, start=1):
+        header = target_ws.cell(row=2, column=dst_col).value
+        header_len = max((len(part) for part in str(header or "").split()), default=0)
+
+        max_len = header_len
+        # Measure only actual table rows, never the title row.
+        for row_idx in range(3, data_last_row + 1):
+            value = target_ws.cell(row=row_idx, column=dst_col).value
+            if value is None:
+                continue
+            text = str(value)
+            # Numeric columns need enough room for formatted values but not unlimited width.
+            max_len = max(max_len, min(len(text), 24))
+
+        header_text = str(header or "").strip().lower()
+        if dst_col == 1 or header_text in {"sr. no.", "sr no.", "sr.no."}:
+            width = 5.5
+        elif "branch name" in header_text or "remarks" in header_text:
+            width = min(max(max_len + 1.5, 14), 24)
+        elif any(k in header_text for k in ("charges", "payable", "cgst", "sgst", "gst 18")):
+            width = min(max(max_len + 1.2, 11), 15)
+        elif any(k in header_text for k in ("account", "lc id", "po no", "loopback", "wan ip")):
+            width = min(max(max_len + 1.2, 10), 15)
+        elif any(k in header_text for k in ("bill from", "bill to", "po date")):
+            width = min(max(max_len + 1.0, 10), 12)
+        else:
+            width = min(max(max_len + 1.0, 6), 14)
+
+        target_ws.column_dimensions[get_column_letter(dst_col)].width = width
 
 
-# -----------------------------
-# DARKER PRINT AND WIDTH FIXES
-# -----------------------------
-def make_font_dark(font: Font, *, bold: bool | None = None, size: float | None = None) -> Font:
-    """Return an Arial, pure-black font while preserving useful font attributes."""
-    return Font(
-        name=DEFAULT_FONT_NAME,
-        size=size if size is not None else (font.size or DEFAULT_DATA_FONT_SIZE),
-        bold=font.bold if bold is None else bold,
-        italic=font.italic,
-        vertAlign=font.vertAlign,
-        underline=font.underline,
-        strike=font.strike,
+def style_generated_sheet(
+    ws,
+    visible_column_count: int,
+    body_font_size: float,
+    header_font_size: float,
+    title_font_size: float,
+    total_row: int,
+) -> None:
+    """Use solid black print-friendly fonts and borders."""
+    for row_idx in range(2, total_row + 1):
+        for col_idx in range(1, visible_column_count + 1):
+            cell = ws.cell(row=row_idx, column=col_idx)
+            is_header = row_idx == 2
+            is_total = row_idx == total_row
+            old = cell.font
+            cell.font = Font(
+                name="Arial",
+                size=header_font_size if is_header else body_font_size,
+                bold=is_header or is_total,
+                italic=old.italic,
+                color=BLACK,
+            )
+            cell.border = MEDIUM_BORDER if is_header or is_total else THIN_BORDER
+
+            if is_header:
+                cell.alignment = Alignment(
+                    horizontal="center",
+                    vertical="center",
+                    wrap_text=True,
+                )
+            else:
+                old_alignment = cell.alignment
+                cell.alignment = Alignment(
+                    horizontal=old_alignment.horizontal,
+                    vertical="center",
+                    wrap_text=old_alignment.wrap_text,
+                    shrink_to_fit=old_alignment.shrink_to_fit,
+                )
+
+    ws.row_dimensions[1].height = max(38, title_font_size * 2.8)
+    ws.row_dimensions[2].height = max(55, header_font_size * 7)
+
+
+def build_repeating_title_row(
+    ws,
+    title_text: str,
+    gst_state_code: object,
+    visible_column_count: int,
+    title_font_size: float,
+) -> None:
+    """Build one full-width repeating title row.
+
+    The GST State Code is appended to the title so the entire heading, including
+    the state code, is large and bold. This also avoids reserving wide blank
+    columns at the right side of the report.
+    """
+    full_title = f"{title_text} - {gst_state_code}"
+    if visible_column_count > 1:
+        ws.merge_cells(
+            start_row=1, start_column=1,
+            end_row=1, end_column=visible_column_count
+        )
+
+    title_cell = ws.cell(row=1, column=1)
+    title_cell.value = full_title
+    title_cell.font = Font(
+        name="Arial",
+        size=max(title_font_size, 14),
+        bold=True,
         color=BLACK,
     )
+    title_cell.alignment = Alignment(
+        horizontal="center",
+        vertical="center",
+        wrap_text=True,
+        shrink_to_fit=False,
+    )
+    title_cell.border = MEDIUM_BORDER
+
+    # Apply the outside/bottom border across the whole merged title range.
+    for col_idx in range(1, visible_column_count + 1):
+        ws.cell(row=1, column=col_idx).border = MEDIUM_BORDER
 
 
-def apply_dark_print_style(ws, max_row: int, max_col: int) -> None:
-    """
-    Make all printable data pure black and strengthen borders.
-    Header rows and total row are bold.
-    """
-    for row_idx in range(1, max_row + 1):
-        is_header = row_idx in (1, 2)
-        is_total = row_idx == max_row
-
-        for col_idx in range(1, max_col + 1):
-            cell = ws.cell(row=row_idx, column=col_idx)
-            if isinstance(cell, MergedCell):
-                continue
-
-            font_size = DEFAULT_HEADER_FONT_SIZE if is_header else DEFAULT_DATA_FONT_SIZE
-            cell.font = make_font_dark(
-                cell.font,
-                bold=True if (is_header or is_total) else None,
-                size=font_size,
-            )
-
-            # Use medium borders for clear printout.
-            cell.border = MEDIUM_BORDER
-
-            # Keep data readable; don't shrink text invisibly.
-            old = cell.alignment
-            cell.alignment = Alignment(
-                horizontal=old.horizontal,
-                vertical=old.vertical or "center",
-                text_rotation=old.text_rotation,
-                wrap_text=old.wrap_text,
-                shrink_to_fit=False,
-                indent=old.indent,
-            )
-
-
-def auto_fit_columns(ws, max_row: int, max_col: int) -> None:
-    """
-    Increase column widths according to displayed content.
-    This prevents Excel/LibreOffice from showing ### for numbers and dates.
-    """
-    for col_idx in range(1, max_col + 1):
-        letter = get_column_letter(col_idx)
-        min_width = (
-            MIN_COLUMN_WIDTHS[col_idx - 1]
-            if col_idx <= len(MIN_COLUMN_WIDTHS)
-            else MIN_AUTO_WIDTH
-        )
-
-        longest = 0
-        numeric_or_date_seen = False
-
-        for row_idx in range(1, max_row + 1):
-            cell = ws.cell(row=row_idx, column=col_idx)
-            if isinstance(cell, MergedCell):
-                continue
-            longest = max(longest, value_display_length(cell.value))
-            if isinstance(cell.value, (int, float)) or cell.is_date:
-                numeric_or_date_seen = True
-
-        padding = 4 if numeric_or_date_seen else 2
-        calculated = longest + padding
-        final_width = max(min_width, min(calculated, MAX_AUTO_WIDTH))
-        ws.column_dimensions[letter].width = final_width
-
-
-def wrap_header_row(ws, max_col: int) -> None:
-    """Wrap and center Row 2 headers."""
-    for col_idx in range(1, max_col + 1):
-        cell = ws.cell(row=2, column=col_idx)
-        if isinstance(cell, MergedCell):
-            continue
-        cell.alignment = Alignment(
-            horizontal="center",
-            vertical="center",
-            wrap_text=True,
-            shrink_to_fit=False,
-        )
-    ws.row_dimensions[2].height = 72
-
-
-def set_data_alignment(ws, first_data_row: int, last_data_row: int, max_col: int) -> None:
-    """Center short values and keep long descriptions wrapped."""
-    for row_idx in range(first_data_row, last_data_row + 1):
-        for col_idx in range(1, max_col + 1):
-            cell = ws.cell(row=row_idx, column=col_idx)
-            if isinstance(cell, MergedCell):
-                continue
-
-            text_length = value_display_length(cell.value)
-            horizontal = "left" if text_length > 18 else "center"
-            cell.alignment = Alignment(
-                horizontal=horizontal,
-                vertical="center",
-                wrap_text=text_length > 18,
-                shrink_to_fit=False,
-            )
-
-
-# -----------------------------
-# PAGE SETTINGS AND PDF
-# -----------------------------
-def apply_pdf_page_settings(workbook_path: Path, paper_size: str = "Legal") -> None:
-    """Apply print settings before LibreOffice converts the workbook to PDF."""
+def apply_pdf_page_settings(workbook_path: Path) -> None:
+    """Fit all columns on one page width; allow rows to flow to additional pages."""
     wb = load_workbook(workbook_path)
     try:
         for ws in wb.worksheets:
             ws.print_title_rows = "1:2"
             ws.page_setup.orientation = "landscape"
-
-            if paper_size.upper() == "A3":
-                ws.page_setup.paperSize = ws.PAPERSIZE_A3
-            else:
-                ws.page_setup.paperSize = ws.PAPERSIZE_LEGAL
-
+            ws.page_setup.paperSize = ws.PAPERSIZE_LEGAL
             ws.page_margins.left = 0.15
             ws.page_margins.right = 0.15
             ws.page_margins.top = 0.20
-            ws.page_margins.bottom = 0.20
-            ws.page_margins.header = 0.10
+            ws.page_margins.bottom = 0.25
+            ws.page_margins.header = 0.05
             ws.page_margins.footer = 0.10
-
-            # Fit every column on ONE page across. Do not fit the sheet vertically.
-            # LibreOffice/Excel will automatically continue excess rows on page 2,
-            # page 3, and so on, while repeating Rows 1 and 2 on every page.
             ws.page_setup.scale = None
             ws.page_setup.fitToWidth = 1
             ws.page_setup.fitToHeight = 0
             ws.sheet_properties.pageSetUpPr.fitToPage = True
-            ws.sheet_view.showGridLines = False
-            ws.oddFooter.center.text = "Page &P"
-            ws.evenFooter.center.text = "Page &P"
-
-            # Print only the used range.
+            ws.sheet_properties.pageSetUpPr.autoPageBreaks = True
+            ws.oddFooter.center.text = "Page &P of &N"
+            ws.evenFooter.center.text = "Page &P of &N"
             ws.print_area = f"A1:{get_column_letter(ws.max_column)}{ws.max_row}"
-
         wb.save(workbook_path)
     finally:
         wb.close()
 
 
+def split_excel_file(
+    uploaded_bytes: bytes,
+    original_name: str,
+    split_col_letter: str,
+    total_from_letter: str,
+    total_to_letter: str,
+    skipped_columns_text: str,
+) -> tuple[dict[str, bytes], list[str]]:
+    split_col = letter_to_index(split_col_letter)
+    total_start_col = letter_to_index(total_from_letter)
+    total_end_col = letter_to_index(total_to_letter)
+    skipped_columns = parse_skipped_columns(skipped_columns_text)
+
+    if total_start_col > total_end_col:
+        raise ValueError("Total Start Column must come before Total End Column.")
+    if split_col in skipped_columns:
+        raise ValueError(
+            f"Split column {split_col_letter.upper()} cannot also be skipped."
+        )
+
+    keep_vba = original_name.lower().endswith(".xlsm")
+    workbook = load_workbook(io.BytesIO(uploaded_bytes), data_only=False, keep_vba=keep_vba)
+
+    try:
+        source_ws = workbook.active
+        max_row = source_ws.max_row
+        source_max_col = max(source_ws.max_column, split_col, total_end_col)
+
+        if max_row < 3:
+            raise ValueError("The selected Excel file has fewer than 3 rows.")
+
+        visible_source_columns = [
+            col for col in range(1, source_max_col + 1) if col not in skipped_columns
+        ]
+        if not visible_source_columns:
+            raise ValueError("All columns have been skipped. Keep at least one column.")
+
+        source_to_destination = {
+            source_col: destination_col
+            for destination_col, source_col in enumerate(visible_source_columns, start=1)
+        }
+
+        total_source_columns = [
+            col for col in range(total_start_col, total_end_col + 1)
+            if col in source_to_destination
+        ]
+        if not total_source_columns:
+            raise ValueError(
+                "All columns in the selected total range have been skipped."
+            )
+
+        unique_values: list[object] = []
+        seen_values: set[str] = set()
+        for row_idx in range(3, max_row + 1):
+            value = source_ws.cell(row=row_idx, column=split_col).value
+            if value is None:
+                continue
+            value_text = str(value).strip()
+            if not value_text or value_text.lower() in {"nan", "none"}:
+                continue
+            if value_text not in seen_values:
+                seen_values.add(value_text)
+                unique_values.append(value)
+
+        if not unique_values:
+            raise ValueError(
+                f"No valid split values were found in column "
+                f"{split_col_letter.upper()} from row 3 onward."
+            )
+
+        visible_count = len(visible_source_columns)
+        body_size, header_size, title_size = choose_font_sizes(visible_count)
+        title_text = source_title_text(source_ws)
+
+        output_files: dict[str, bytes] = {}
+        used_names: set[str] = set()
+        warnings: list[str] = []
+
+        skipped_sorted = sorted(skipped_columns)
+        if skipped_sorted:
+            skipped_display = ", ".join(get_column_letter(col) for col in skipped_sorted)
+            warnings.append(f"Skipped source columns: {skipped_display}")
+        warnings.append(
+            f"Remaining columns: {visible_count}; body font automatically set to {body_size} pt."
+        )
+
+        for split_value in unique_values:
+            new_wb = Workbook()
+            new_ws = new_wb.active
+            new_ws.title = source_ws.title
+
+            # Row 2 is the original column-header row. Row 1 is rebuilt below.
+            copy_selected_row(source_ws, new_ws, 2, 2, visible_source_columns)
+            new_ws.cell(row=2, column=1).value = "Sr. No."
+
+            destination_row = 3
+            serial_number = 1
+            split_text = str(split_value).strip()
+
+            for source_row in range(3, max_row + 1):
+                source_value = source_ws.cell(row=source_row, column=split_col).value
+                if source_value is not None and str(source_value).strip() == split_text:
+                    copy_selected_row(
+                        source_ws,
+                        new_ws,
+                        source_row,
+                        destination_row,
+                        visible_source_columns,
+                    )
+                    new_ws.cell(row=destination_row, column=1).value = serial_number
+                    serial_number += 1
+                    destination_row += 1
+
+            total_row = destination_row
+            first_total_dest = source_to_destination[total_source_columns[0]]
+            total_label_dest = max(1, first_total_dest - 1)
+            new_ws.cell(row=total_row, column=total_label_dest).value = "Total"
+
+            for source_col in total_source_columns:
+                destination_col = source_to_destination[source_col]
+                total_cell = new_ws.cell(row=total_row, column=destination_col)
+                col_letter = get_column_letter(destination_col)
+                total_cell.value = (
+                    f"=SUM({col_letter}3:{col_letter}{total_row - 1})"
+                    if total_row > 3 else 0
+                )
+                total_cell.number_format = source_ws.cell(row=3, column=source_col).number_format
+
+            build_repeating_title_row(
+                new_ws,
+                title_text=title_text,
+                gst_state_code=split_value,
+                visible_column_count=visible_count,
+                title_font_size=title_size,
+            )
+            apply_column_widths(
+                source_ws,
+                new_ws,
+                visible_source_columns,
+                body_font_size=body_size,
+                data_last_row=total_row,
+            )
+            style_generated_sheet(
+                new_ws,
+                visible_column_count=visible_count,
+                body_font_size=body_size,
+                header_font_size=header_size,
+                title_font_size=title_size,
+                total_row=total_row,
+            )
+
+            new_ws.freeze_panes = "A3"
+            new_ws.auto_filter.ref = f"A2:{get_column_letter(visible_count)}{max(2, total_row - 1)}"
+            new_ws.print_title_rows = "1:2"
+            new_ws.sheet_view.showGridLines = False
+
+            safe_name = clean_filename(split_value)
+            filename = unique_filename(safe_name, used_names, ".xlsx")
+            out_stream = io.BytesIO()
+            new_wb.save(out_stream)
+            new_wb.close()
+            output_files[filename] = out_stream.getvalue()
+
+        return output_files, warnings
+    finally:
+        workbook.close()
+
+
 def find_libreoffice() -> str | None:
-    """Find LibreOffice on Linux, macOS or Windows."""
     for command in ("libreoffice", "soffice"):
         found = shutil.which(command)
         if found:
             return found
 
-    windows_paths = [
+    for path in (
         r"C:\Program Files\LibreOffice\program\soffice.exe",
         r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
-    ]
-    for path in windows_paths:
+    ):
         if os.path.exists(path):
             return path
     return None
 
 
-def convert_excels_to_pdfs(
-    excel_files: dict[str, bytes],
-    paper_size: str,
-) -> tuple[dict[str, bytes], list[str]]:
-    """Convert generated Excel files to PDF through LibreOffice."""
+def convert_excels_to_pdfs(excel_files: dict[str, bytes]) -> tuple[dict[str, bytes], list[str]]:
     soffice = find_libreoffice()
     if not soffice:
         raise RuntimeError(
@@ -332,15 +500,14 @@ def convert_excels_to_pdfs(
             profile_dir.mkdir()
 
             try:
-                apply_pdf_page_settings(excel_path, paper_size=paper_size)
-                profile_url = profile_dir.resolve().as_uri()
+                apply_pdf_page_settings(excel_path)
                 command = [
                     soffice,
                     "--headless",
                     "--nologo",
                     "--nofirststartwizard",
                     "--norestore",
-                    f"-env:UserInstallation={profile_url}",
+                    f"-env:UserInstallation={profile_dir.resolve().as_uri()}",
                     "--convert-to",
                     "pdf:calc_pdf_Export",
                     "--outdir",
@@ -365,137 +532,11 @@ def convert_excels_to_pdfs(
     return pdf_files, errors
 
 
-# -----------------------------
-# EXCEL SPLITTING
-# -----------------------------
-def split_excel_file(
-    uploaded_bytes: bytes,
-    original_name: str,
-    split_col_letter: str,
-    total_from_letter: str,
-    total_to_letter: str,
-    auto_widths: bool,
-) -> tuple[dict[str, bytes], list[str]]:
-    split_col = letter_to_index(split_col_letter)
-    total_start_col = letter_to_index(total_from_letter)
-    total_end_col = letter_to_index(total_to_letter)
-
-    if total_start_col > total_end_col:
-        raise ValueError("Total Start Column must come before Total End Column.")
-
-    keep_vba = original_name.lower().endswith(".xlsm")
-    source_stream = io.BytesIO(uploaded_bytes)
-    workbook = load_workbook(source_stream, data_only=False, keep_vba=keep_vba)
-
-    try:
-        source_ws = workbook.active
-        max_row = source_ws.max_row
-        max_col = max(source_ws.max_column, split_col, total_end_col)
-
-        if max_row < 3:
-            raise ValueError("The selected Excel file has fewer than 3 rows.")
-
-        unique_values: list[object] = []
-        seen_values: set[str] = set()
-
-        for row_idx in range(3, max_row + 1):
-            value = source_ws.cell(row=row_idx, column=split_col).value
-            if value is None:
-                continue
-            value_text = str(value).strip()
-            if not value_text or value_text.lower() in {"nan", "none"}:
-                continue
-            if value_text not in seen_values:
-                seen_values.add(value_text)
-                unique_values.append(value)
-
-        if not unique_values:
-            raise ValueError(
-                f"No valid split values were found in column "
-                f"{split_col_letter.upper()} from row 3 onward."
-            )
-
-        output_files: dict[str, bytes] = {}
-        used_names: set[str] = set()
-        warnings: list[str] = []
-        total_label_col = max(1, total_start_col - 1)
-
-        for split_value in unique_values:
-            new_wb = Workbook()
-            new_ws = new_wb.active
-            new_ws.title = source_ws.title
-
-            copy_column_dimensions(source_ws, new_ws, max_col)
-            copy_row(source_ws, new_ws, 1, 1, max_col)
-            copy_row(source_ws, new_ws, 2, 2, max_col)
-            copy_header_merged_cells(source_ws, new_ws)
-
-            split_header = new_ws.cell(row=1, column=split_col)
-            split_header.value = split_value
-            split_header.font = make_font_dark(split_header.font, bold=True, size=11)
-            split_header.border = MEDIUM_BORDER
-            split_header.alignment = Alignment(horizontal="center", vertical="center")
-
-            new_ws.cell(row=2, column=1).value = "Sr. No."
-            wrap_header_row(new_ws, max_col)
-
-            destination_row = 3
-            serial_number = 1
-            split_text = str(split_value).strip()
-
-            for source_row in range(3, max_row + 1):
-                source_value = source_ws.cell(row=source_row, column=split_col).value
-                if source_value is not None and str(source_value).strip() == split_text:
-                    copy_row(source_ws, new_ws, source_row, destination_row, max_col)
-                    new_ws.cell(row=destination_row, column=1).value = serial_number
-                    serial_number += 1
-                    destination_row += 1
-
-            total_row = destination_row
-            new_ws.cell(row=total_row, column=total_label_col).value = "Total"
-
-            for col_idx in range(total_start_col, total_end_col + 1):
-                total_cell = new_ws.cell(row=total_row, column=col_idx)
-                col_letter = get_column_letter(col_idx)
-                total_cell.value = (
-                    f"=SUM({col_letter}3:{col_letter}{total_row - 1})"
-                    if total_row > 3
-                    else 0
-                )
-                total_cell.number_format = source_ws.cell(row=3, column=col_idx).number_format
-
-            # Improve visibility before saving.
-            set_data_alignment(new_ws, 3, total_row, max_col)
-            apply_dark_print_style(new_ws, total_row, max_col)
-
-            if auto_widths:
-                auto_fit_columns(new_ws, total_row, max_col)
-
-            # Keep title and header rows visible when scrolling/printing.
-            new_ws.freeze_panes = "A3"
-            new_ws.auto_filter.ref = f"A2:{get_column_letter(max_col)}{total_row}"
-
-            safe_name = clean_filename(split_value)
-            filename = unique_filename(safe_name, used_names, ".xlsx")
-            out_stream = io.BytesIO()
-            new_wb.save(out_stream)
-            new_wb.close()
-            output_files[filename] = out_stream.getvalue()
-
-        return output_files, warnings
-    finally:
-        workbook.close()
-
-
-# -----------------------------
-# ZIP AND STREAMLIT STATE
-# -----------------------------
-def make_zip(files: dict[str, bytes], folder_name: str | None = None) -> bytes:
+def make_zip(files: dict[str, bytes]) -> bytes:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
         for filename, data in files.items():
-            archive_name = f"{folder_name}/{filename}" if folder_name else filename
-            archive.writestr(archive_name, data)
+            archive.writestr(filename, data)
     return output.getvalue()
 
 
@@ -520,9 +561,6 @@ def initialize_state() -> None:
             st.session_state[key] = value
 
 
-# -----------------------------
-# STREAMLIT APP
-# -----------------------------
 def main() -> None:
     st.set_page_config(
         page_title="Excel Splitter & PDF Generator",
@@ -533,36 +571,38 @@ def main() -> None:
 
     st.title("Excel Splitter & PDF Generator")
     st.caption(
-        "Creates separate Excel and PDF files with dark print, stronger borders, "
-        "one-page-wide printing, repeated headers, and automatic continuation of rows "
-        "onto additional pages."
+        "Split by GST State Code, remove unwanted columns, and generate print-ready Excel/PDF files."
     )
 
     uploaded_file = st.file_uploader("Upload Excel file", type=["xlsx", "xlsm"])
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        split_col = st.text_input("Split column", value="U", max_chars=3).upper()
-    with col2:
-        total_from = st.text_input("Total starts at column", value="D", max_chars=3).upper()
-    with col3:
-        total_to = st.text_input("Total ends at column", value="F", max_chars=3).upper()
+    top1, top2 = st.columns([1, 2])
+    with top1:
+        split_col = st.text_input(
+            "GST State Code / split column",
+            value="U",
+            max_chars=3,
+            help="The values in this column create separate files, for example AP, AS, MH.",
+        ).upper()
+    with top2:
+        skipped_columns = st.text_input(
+            "Columns not required — enter source column letters",
+            value="",
+            placeholder="Example: A,B,C",
+            help="These columns will be completely removed before Excel and PDF generation.",
+        ).upper()
 
-    option1, option2, option3 = st.columns(3)
-    with option1:
-        auto_widths = st.checkbox(
-            "Auto-fit columns to prevent ###",
-            value=True,
-        )
-    with option2:
-        generate_pdf_now = st.checkbox("Also generate PDF files", value=True)
-    with option3:
-        paper_size = st.selectbox("PDF paper size", ["Legal", "A3"], index=0)
+    col1, col2 = st.columns(2)
+    with col1:
+        total_from = st.text_input("Total starts at source column", value="D", max_chars=3).upper()
+    with col2:
+        total_to = st.text_input("Total ends at source column", value="F", max_chars=3).upper()
+
+    generate_pdf_now = st.checkbox("Also generate PDF files", value=True)
 
     st.info(
-        "Recommended to match the sample: Legal Landscape and Auto-fit ON. "
-        "All columns are fitted on one page across; additional rows automatically "
-        "continue on page 2 and further pages."
+        "The app automatically increases the font when columns are removed. "
+        "Row 1 contains the main title and a large bold GST State Code, and rows 1–2 repeat on every PDF page."
     )
 
     if st.button("Generate Files", type="primary", use_container_width=True):
@@ -570,16 +610,15 @@ def main() -> None:
             st.error("Please upload an Excel file.")
         else:
             try:
-                uploaded_bytes = uploaded_file.getvalue()
                 with st.status("Processing workbook...", expanded=True) as status:
-                    st.write("Reading the workbook and identifying split values...")
+                    st.write("Reading the workbook and removing unwanted columns...")
                     excel_files, warnings = split_excel_file(
-                        uploaded_bytes=uploaded_bytes,
+                        uploaded_bytes=uploaded_file.getvalue(),
                         original_name=uploaded_file.name,
                         split_col_letter=split_col,
                         total_from_letter=total_from,
                         total_to_letter=total_to,
-                        auto_widths=auto_widths,
+                        skipped_columns_text=skipped_columns,
                     )
                     st.session_state.excel_files = excel_files
                     st.session_state.pdf_files = {}
@@ -587,17 +626,14 @@ def main() -> None:
                     st.write(f"Created {len(excel_files)} split Excel file(s).")
 
                     if generate_pdf_now:
-                        st.write("Applying A3/Legal landscape settings and generating PDFs...")
-                        pdf_files, errors = convert_excels_to_pdfs(
-                            excel_files,
-                            paper_size=paper_size,
-                        )
+                        st.write("Converting Excel files to multi-page PDFs...")
+                        pdf_files, errors = convert_excels_to_pdfs(excel_files)
                         st.session_state.pdf_files = pdf_files
                         st.session_state.conversion_errors = errors
                         st.write(f"Created {len(pdf_files)} PDF file(s).")
 
                     for warning in warnings:
-                        st.warning(warning)
+                        st.info(warning)
                     status.update(label="Processing completed", state="complete")
             except Exception as exc:
                 st.session_state.excel_files = {}
@@ -612,14 +648,13 @@ def main() -> None:
     if excel_files:
         st.divider()
         st.subheader("Download Results")
-
         m1, m2, m3 = st.columns(3)
         m1.metric("Excel files", len(excel_files))
         m2.metric("PDF files", len(pdf_files))
         m3.metric("PDF errors", len(errors))
 
-        download_col1, download_col2, download_col3 = st.columns(3)
-        with download_col1:
+        d1, d2, d3 = st.columns(3)
+        with d1:
             st.download_button(
                 "Download Excel ZIP",
                 data=make_zip(excel_files),
@@ -627,7 +662,7 @@ def main() -> None:
                 mime="application/zip",
                 use_container_width=True,
             )
-        with download_col2:
+        with d2:
             if pdf_files:
                 st.download_button(
                     "Download PDF ZIP",
@@ -636,7 +671,7 @@ def main() -> None:
                     mime="application/zip",
                     use_container_width=True,
                 )
-        with download_col3:
+        with d3:
             if pdf_files:
                 st.download_button(
                     "Download Excel + PDF ZIP",
