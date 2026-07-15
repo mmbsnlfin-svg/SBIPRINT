@@ -724,7 +724,7 @@ def main() -> None:
             st.code("\n".join(errors), language=None)
 
     st.divider()
-    st.caption("Created for BSNL | Optimized for 20,000+ rows | Summary grouped by GST State Code + Parent BA")
+    st.caption("Created by  @ HRUSHIKESH KESALE- ACCOUNTS OFFICER ")
 
 
 if __name__ == "__main__":
