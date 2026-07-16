@@ -67,7 +67,7 @@ SUMMARY_HEADERS = [
 
 BLACK = "000000"
 GREEN = "92D050"
-HEADER_FILL = PatternFill("solid", fgColor=GREEN)
+HEADER_FILL = PatternFill("solid", fgColor="FFFFFF")
 WHITE_FILL = PatternFill("solid", fgColor="FFFFFF")
 THIN_SIDE = Side(style="thin", color=BLACK)
 MEDIUM_SIDE = Side(style="medium", color=BLACK)
@@ -78,8 +78,8 @@ COLUMN_WIDTHS = {
     "Sr. No.": 7, "ACCOUNT _NUM": 15, "LC ID": 14, "Bill From": 11,
     "Bill To": 11, "Days": 7, "Branch Code": 11, "Branch Name": 27,
     "C Type": 9, "Port BW": 11, "Annual Recurring Charges": 18,
-    "Quarterly Charges": 17, "NTU Chg /Modem Chg": 12,
-    "NOFN charges": 10, "IDR / Submarine Charges": 13,
+    "Quarterly Charges": 17, "NTU Chg /Modem Chg": 17,
+    "NOFN charges": 14, "IDR / Submarine Charges": 20,
     "Total Quarterly charges Gross": 20, "GST 18%": 18,
     "Net Payable After Tax": 19, "GST STATE": 11, "Parent BA": 14,
     "PO NO": 14, "PO Date": 11,
@@ -274,7 +274,16 @@ def style_output_sheet(
             else:
                 cell.font = body_font
             cell.border = MEDIUM_BORDER if is_total else THIN_BORDER
-            cell.alignment = left if header == "Branch Name" else center
+            if header == "Branch Name":
+                cell.alignment = left
+            elif header in {"NTU Chg /Modem Chg", "NOFN charges", "IDR / Submarine Charges"}:
+                # Keep charge values visible even when totals are large.
+                cell.alignment = Alignment(
+                    horizontal="center", vertical="center",
+                    wrap_text=True, shrink_to_fit=True
+                )
+            else:
+                cell.alignment = center
         ws.row_dimensions[row].height = 40 if is_total else 36
 
     out_map = output_column_map()
@@ -786,7 +795,7 @@ def main() -> None:
             st.code("\n".join(errors), language=None)
 
     st.divider()
-    st.caption("Created HRUSHIKESH KESALE Accounts officer MH Circle Mumbai.")
+    st.caption("Created by @ HRUSHIKESH KESALE Accounts officer MH Circle Mumbai")
 
 
 if __name__ == "__main__":
