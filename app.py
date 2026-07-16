@@ -76,11 +76,11 @@ MEDIUM_BORDER = Border(left=MEDIUM_SIDE, right=MEDIUM_SIDE, top=MEDIUM_SIDE, bot
 
 COLUMN_WIDTHS = {
     "Sr. No.": 7, "ACCOUNT _NUM": 15, "LC ID": 14, "Bill From": 11,
-    "Bill To": 11, "Days": 7, "Branch Code": 11, "Branch Name": 29,
+    "Bill To": 11, "Days": 7, "Branch Code": 11, "Branch Name": 27,
     "C Type": 9, "Port BW": 11, "Annual Recurring Charges": 18,
-    "Quarterly Charges": 17, "NTU Chg /Modem Chg": 16,
-    "NOFN charges": 14, "IDR / Submarine Charges": 17,
-    "Total Quarterly charges Gross": 20, "GST 18%": 15,
+    "Quarterly Charges": 17, "NTU Chg /Modem Chg": 12,
+    "NOFN charges": 10, "IDR / Submarine Charges": 13,
+    "Total Quarterly charges Gross": 20, "GST 18%": 18,
     "Net Payable After Tax": 19, "GST STATE": 11, "Parent BA": 14,
     "PO NO": 14, "PO Date": 11,
 }
@@ -255,6 +255,10 @@ def style_output_sheet(
 
     # Apply styles by row/column without copying source styles. This is much faster.
     body_font = Font(name="Calibri", size=body_font_size, color=BLACK)
+    # Branch names can be long. Use a slightly smaller font only in this column
+    # so the GST and other numeric columns keep the user-selected font size.
+    branch_font_size = max(8, body_font_size - 2)
+    branch_font = Font(name="Calibri", size=branch_font_size, color=BLACK)
     total_font = Font(name="Calibri", size=body_font_size, bold=True, color=BLACK)
     center = Alignment(horizontal="center", vertical="center", wrap_text=True)
     left = Alignment(horizontal="left", vertical="center", wrap_text=True)
@@ -263,7 +267,12 @@ def style_output_sheet(
         for col in range(1, max_col + 1):
             header = REQUIRED_OUTPUT_HEADERS[col - 1]
             cell = ws.cell(row, col)
-            cell.font = total_font if is_total else body_font
+            if is_total:
+                cell.font = total_font
+            elif header == "Branch Name":
+                cell.font = branch_font
+            else:
+                cell.font = body_font
             cell.border = MEDIUM_BORDER if is_total else THIN_BORDER
             cell.alignment = left if header == "Branch Name" else center
         ws.row_dimensions[row].height = 40 if is_total else 36
