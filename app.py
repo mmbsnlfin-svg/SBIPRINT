@@ -75,14 +75,14 @@ THIN_BORDER = Border(left=THIN_SIDE, right=THIN_SIDE, top=THIN_SIDE, bottom=THIN
 MEDIUM_BORDER = Border(left=MEDIUM_SIDE, right=MEDIUM_SIDE, top=MEDIUM_SIDE, bottom=MEDIUM_SIDE)
 
 COLUMN_WIDTHS = {
-    "Sr. No.": 7, "ACCOUNT _NUM": 15, "LC ID": 14, "Bill From": 13,
-    "Bill To": 13, "Days": 7, "Branch Code": 11, "Branch Name": 29,
+    "Sr. No.": 7, "ACCOUNT _NUM": 15, "LC ID": 14, "Bill From": 11,
+    "Bill To": 11, "Days": 7, "Branch Code": 11, "Branch Name": 29,
     "C Type": 9, "Port BW": 11, "Annual Recurring Charges": 18,
     "Quarterly Charges": 17, "NTU Chg /Modem Chg": 16,
     "NOFN charges": 14, "IDR / Submarine Charges": 17,
     "Total Quarterly charges Gross": 20, "GST 18%": 15,
     "Net Payable After Tax": 19, "GST STATE": 11, "Parent BA": 14,
-    "PO NO": 14, "PO Date": 13,
+    "PO NO": 14, "PO Date": 11,
 }
 
 FORMULA_HEADERS = {
@@ -217,7 +217,24 @@ def title_text(source_title: Any, split_value: Any) -> str:
     return text
 
 
-def style_output_sheet(ws, total_row: int, body_font_size: int = 12, bottom_margin: float = 1.25) -> None:
+def paper_size_code(ws, page_size: str):
+    sizes = {
+        "A4": ws.PAPERSIZE_A4,
+        "Legal": ws.PAPERSIZE_LEGAL,
+        "A3": ws.PAPERSIZE_A3,
+    }
+    return sizes.get(page_size, ws.PAPERSIZE_A3)
+
+
+def style_output_sheet(
+    ws,
+    total_row: int,
+    body_font_size: int = 12,
+    page_size: str = "A3",
+    bottom_margin: float = 1.25,
+    left_margin: float = 0.15,
+    right_margin: float = 0.15,
+) -> None:
     max_col = len(REQUIRED_OUTPUT_HEADERS)
     ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_col)
     title = ws.cell(1, 1)
@@ -255,7 +272,7 @@ def style_output_sheet(ws, total_row: int, body_font_size: int = 12, bottom_marg
     for header in ("Bill From", "Bill To", "PO Date"):
         col = out_map[header]
         for row in range(3, total_row):
-            ws.cell(row, col).number_format = "dd-mmm-yyyy"
+            ws.cell(row, col).number_format = "dd-mm-yy"
 
     for header in TOTAL_HEADERS:
         col = out_map[header]
@@ -267,13 +284,13 @@ def style_output_sheet(ws, total_row: int, body_font_size: int = 12, bottom_marg
     ws.print_title_rows = "1:2"
     ws.print_area = f"A1:{get_column_letter(max_col)}{total_row}"
     ws.page_setup.orientation = "landscape"
-    ws.page_setup.paperSize = ws.PAPERSIZE_A3
+    ws.page_setup.paperSize = paper_size_code(ws, page_size)
     ws.page_setup.scale = None
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
-    ws.page_margins.left = 0.15
-    ws.page_margins.right = 0.15
+    ws.page_margins.left = left_margin
+    ws.page_margins.right = right_margin
     ws.page_margins.top = 0.25
     ws.page_margins.bottom = bottom_margin
     ws.page_margins.header = 0.1
@@ -331,7 +348,15 @@ def read_summary_master(master_bytes: bytes | None) -> dict[tuple[str, str], dic
         wb.close()
 
 
-def build_summary_workbook(summary_rows: list[dict[str, Any]], summary_title: str, body_font_size: int = 12, bottom_margin: float = 1.25) -> bytes:
+def build_summary_workbook(
+    summary_rows: list[dict[str, Any]],
+    summary_title: str,
+    body_font_size: int = 12,
+    page_size: str = "A3",
+    bottom_margin: float = 1.25,
+    left_margin: float = 0.2,
+    right_margin: float = 0.2,
+) -> bytes:
     wb = Workbook()
     ws = wb.active
     ws.title = "Summary"
@@ -384,7 +409,7 @@ def build_summary_workbook(summary_rows: list[dict[str, Any]], summary_title: st
     ws.row_dimensions[total_row].height = 40
 
     for row in range(3, total_row + 1):
-        ws.cell(row, 5).number_format = "dd-mmm-yyyy"
+        ws.cell(row, 5).number_format = "dd-mm-yy"
         for col in range(9, 15):
             ws.cell(row, col).number_format = '#,##0.00;[Red]-#,##0.00;"-"'
 
@@ -392,12 +417,12 @@ def build_summary_workbook(summary_rows: list[dict[str, Any]], summary_title: st
     ws.print_title_rows = "1:2"
     ws.print_area = f"A1:N{total_row}"
     ws.page_setup.orientation = "landscape"
-    ws.page_setup.paperSize = ws.PAPERSIZE_A3
+    ws.page_setup.paperSize = paper_size_code(ws, page_size)
     ws.page_setup.fitToWidth = 1
     ws.page_setup.fitToHeight = 0
     ws.sheet_properties.pageSetUpPr.fitToPage = True
-    ws.page_margins.left = 0.2
-    ws.page_margins.right = 0.2
+    ws.page_margins.left = left_margin
+    ws.page_margins.right = right_margin
     ws.page_margins.top = 0.25
     ws.page_margins.bottom = bottom_margin
     ws.oddFooter.center.text = "Page &P of &N"
@@ -420,7 +445,10 @@ def split_excel_file(
     summary_title_override: str,
     progress_callback=None,
     body_font_size: int = 12,
+    page_size: str = "A3",
     bottom_margin: float = 1.25,
+    left_margin: float = 0.15,
+    right_margin: float = 0.15,
 ) -> tuple[dict[str, bytes], list[str]]:
     """Optimized for 20,000+ rows.
 
@@ -514,7 +542,10 @@ def split_excel_file(
                 col = out_map[header]
                 letter = get_column_letter(col)
                 ws.cell(total_row, col).value = f"=SUM({letter}3:{letter}{total_row - 1})"
-            style_output_sheet(ws, total_row, body_font_size=body_font_size, bottom_margin=bottom_margin)
+            style_output_sheet(
+                ws, total_row, body_font_size=body_font_size, page_size=page_size,
+                bottom_margin=bottom_margin, left_margin=left_margin, right_margin=right_margin
+            )
 
             out = io.BytesIO()
             new_wb.save(out)
@@ -545,7 +576,10 @@ def split_excel_file(
             })
 
         summary_title = summary_title_override.strip() or f"Summary - {str(source_title or '').strip()}"
-        output_files["Summary.xlsx"] = build_summary_workbook(summary_rows, summary_title, body_font_size=body_font_size, bottom_margin=bottom_margin)
+        output_files["Summary.xlsx"] = build_summary_workbook(
+            summary_rows, summary_title, body_font_size=body_font_size, page_size=page_size,
+            bottom_margin=bottom_margin, left_margin=left_margin, right_margin=right_margin
+        )
         if progress_callback:
             progress_callback(1.0, "Excel generation completed")
         return output_files, warnings
@@ -643,10 +677,26 @@ def main() -> None:
     )
     summary_title = st.text_input("Summary title (optional)")
     p1, p2 = st.columns(2)
-    body_font_size = p1.number_input("Data font size", min_value=10, max_value=16, value=12, step=1)
-    bottom_margin = p2.number_input(
-        "Bottom margin for stamp/sign (inches)", min_value=0.25, max_value=3.0,
-        value=1.25, step=0.25, help="Keeps blank space at the bottom of every printed page."
+    body_font_size = p1.number_input(
+        "Calibri data font size", min_value=10, max_value=16, value=12, step=1
+    )
+    page_size = p2.selectbox(
+        "Page size", ["A4", "Legal", "A3"], index=2,
+        help="All columns are fitted to one page width for the selected paper size."
+    )
+
+    m1, m2, m3 = st.columns(3)
+    bottom_margin = m1.number_input(
+        "Bottom margin (inches)", min_value=0.25, max_value=3.0,
+        value=1.25, step=0.05, help="Reserve space for stamp and signature."
+    )
+    left_margin = m2.number_input(
+        "Left margin (inches)", min_value=0.05, max_value=2.0,
+        value=0.15, step=0.05
+    )
+    right_margin = m3.number_input(
+        "Right margin (inches)", min_value=0.05, max_value=2.0,
+        value=0.15, step=0.05
     )
     generate_pdf = st.checkbox("Also generate PDF files", value=False, help="For 20,000+ rows, first generate Excel files. PDF conversion may take several minutes per state.")
 
@@ -667,7 +717,10 @@ def main() -> None:
                         summary_title,
                         progress_callback=update_progress,
                         body_font_size=int(body_font_size),
+                        page_size=page_size,
                         bottom_margin=float(bottom_margin),
+                        left_margin=float(left_margin),
+                        right_margin=float(right_margin),
                     )
                     st.session_state.excel_files = excel_files
                     st.session_state.pdf_files = {}
@@ -724,7 +777,7 @@ def main() -> None:
             st.code("\n".join(errors), language=None)
 
     st.divider()
-    st.caption("Created by  @ HRUSHIKESH KESALE- ACCOUNTS OFFICER MH CIRCLE MUMBAI ")
+    st.caption("Created HRUSHIKESH KESALE Accounts officer MH Circle Mumbai.")
 
 
 if __name__ == "__main__":
